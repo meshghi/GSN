@@ -1,0 +1,323 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;  STATIC POSTS  ;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to step-main
+  if state = "main-INIT" [ step_main-INIT stop ]
+  if state = "main-IDLE" [ step_main-IDLE stop ]
+  if state = "main-SSNG" [ step_main-SSNG stop ]
+end
+
+to step_main-INIT
+  ;; posts broadcast their own information and become IDLE
+  broadcast (list "main-PING" who ntw plos)
+  become "main-IDLE"
+end
+
+to step_main-IDLE
+  ;;Receiving main-PING message
+  if has-message "main-PING" [
+    let msg received "main-PING"
+    set fl lput (list item 1 msg item 2 msg item 3 msg) fl
+  ]
+  ;; If a post hears from all its neighbors, it becomes sensing
+  if (length fl = count link-neighbors) [
+    set intrsct isIntersection?
+    become "main-SSNG"
+  ]
+end
+
+to step_main-SSNG
+  
+  ;;;;;;;;;;;;;;;;;;;;;;
+  ;; initializing O
+  ask posts [
+    if (intrsct and limit = 1) [
+      broadcast (list "init_look_ahead" who who) ;; it is done once which is controlled by "limit" parameter
+      set limit 0
+    ]
+  ]
+  
+  if has-message "init_look_ahead" [
+    let msg received "init_look_ahead"
+    ifelse (intrsct)[
+      let in_dir (position item 2 msg nbrs)
+      set O lput (list item 1 msg in_dir 1 1 1 1 1) O ;; O = [id dir N E S W LA] for neighbors
+    ][
+      foreach fl [ el -> 
+        if (item 1 el = true and (item 0 el != item 2 msg)) [
+          send (list "init_look_ahead" (item 1 msg) who) post item 0 el
+        ]
+      ]
+    ]
+  ]
+  ;; initializing O, END
+  ;;;;;;;;;;;;;;;;;;;;;;
+  
+  
+  
+  
+  ;; Sensing the Environment in order to find changes (i.e. flood)
+  ask patch-here [
+    ;; If a sensing post senses the flood, it broadcasts the flood message and it becomes region. Otherwise, if it is an intersection post, it checks for deadend!
+    ifelse (flood?) [
+      ask posts-here [
+        set plos 0
+        broadcast (list "flood" who plos)
+      ]
+      ask myself [ become "main-RIGN" ]
+    ][
+      check-for-dead-end
+    ]
+  ]
+  ;; Receiving the flood message
+  if has-message "flood" [
+    update_plos
+  ]
+  ;; This message is for checking level of safety at post level
+  if has-message "safety-update" [
+    re_update_plos
+  ]
+  ;; This message is for checking deadend at intersection level
+  if has-message "open-angle" [
+    update_O_table
+  ]
+  
+  if has-message "closed_look_ahead" [
+   re_update_O_table 
+  ]
+  
+  ;; SENDING INFORMATION TO THE CARS  
+  if has-message "info_request" [
+    let msg received "info_request"
+    let permit false
+    ask cars [if (who = item 1 msg) [set permit true]]
+    if (permit)[
+      ifelse (intrsct)[
+        
+        let dir_temp -1
+        let next_id -1
+        let los_dir -1
+        let next_la 0
+        
+        foreach fl [ el ->          
+          set los_dir item 2 el
+          set dir_temp position item 0 el nbrs
+          let index find-position 1 dir_temp O
+          if (index != false)[
+            set next_id item 0 item index O
+            set next_la  item 6 item index O
+          ]
+          send (list "intersection_response" who dir_temp next_id los_dir next_la) (car item 1 msg) 
+        ]
+      ][
+        foreach fl [ el ->
+          if(item 1 el) [
+            send (list "street_response" who item 0 el item 2 el) (car item 1 msg)
+          ]
+        ]
+      ]
+    ]
+  ]
+end
+
+
+;; Updating the level-of-safety
+to update_plos
+  let msg received "flood"
+  let index find-position 0 item 1 msg fl
+  let ntw_t item 1 item index fl
+  set fl remove-item index fl
+  set fl lput (list item 1 msg ntw_t item 2 msg) fl
+  let plos_t plos
+  calculate_plos
+  if (plos_t != plos) [
+    broadcast (list "safety-update" who plos)
+  ]
+end
+
+;; Updating the level-of-safety
+to re_update_plos
+  let msg received "safety-update"
+  let index find-position 0 item 1 msg fl
+  let ntw_t item 1 item index fl
+  set fl remove-item index fl
+  set fl lput (list item 1 msg ntw_t item 2 msg) fl
+  let plos_t plos
+  calculate_plos
+  if (plos_t != plos) [
+    foreach fl [ el ->
+      if ((item 1 el = true) and (item 0 el != item 1 msg)) [
+        send (list "safety-update" who plos) post item 0 el
+      ]
+    ]
+  ]
+end
+
+;; The function which is used for updating the level-of-safety
+to calculate_plos
+  let num-rd-fld 0
+  let num-nrd-fld 0
+  let num-rd-nfld-unsf 0 
+  let num-nrd-nfld-unsf 0
+  foreach fl [ el ->
+    if (item 1 el = true and item 2 el = 0)  [set num-rd-fld num-rd-fld + 1]
+    if (item 1 el = true and item 2 el = 1)  [set num-rd-nfld-unsf num-rd-nfld-unsf + 1]
+    if (item 1 el = false and item 2 el = 0) [set num-nrd-fld num-nrd-fld + 1]
+    if (item 1 el = false and item 2 el = 1) [set num-nrd-nfld-unsf num-nrd-nfld-unsf + 1]
+  ]
+  ifelse (intrsct)[
+    if ((num-rd-fld + num-rd-nfld-unsf) = 0) [set plos 3]
+    if ((num-rd-fld + num-rd-nfld-unsf) = 1 or (num-rd-fld + num-rd-nfld-unsf) = 2) [set plos 2]
+    if ((num-rd-fld + num-rd-nfld-unsf) >= 3) [set plos 1]    
+  ][
+    ifelse (ntw) [
+      ifelse (num-rd-fld = 0) [
+        ifelse (num-nrd-fld = 0) [
+          ifelse (num-rd-nfld-unsf = 0) [set plos 3][set plos 1]
+        ][
+          ifelse (num-rd-nfld-unsf = 0) [set plos 2][set plos 1]
+        ]
+      ][
+        set plos 1
+      ]
+    ][
+      ifelse ((num-rd-fld + num-nrd-fld) != 0) [
+        set plos 2
+      ][
+        set plos 3
+      ]
+    ]
+  ]
+end
+
+;; SSNG check for existing dead-ends if it is not flooded
+to check-for-dead-end
+  ;; checking the deadend status at intersection level
+  ask posts-here [
+    if (intrsct) [
+      let open_angle_temp open-angle
+      foreach fl [ el ->
+        if (item 2 el = 0 or item 2 el = 1) [
+          set open-angle replace-item (position item 0 el nbrs) open-angle 0
+        ]
+      ]
+      if ((eqset open_angle_temp open-angle) = false) [
+        broadcast (list "open-angle" who item 0 open-angle item 1 open-angle item 2 open-angle item 3 open-angle who)
+        
+        ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+        ;;recalculate LA in O
+        
+        foreach O [ el ->
+          let dir_oa item (item 1 el) open-angle
+          if (dir_oa = 1)[
+            let oa_temp []
+            set oa_temp lput (list (item 2 el) (item 3 el) (item 4 el) (item 5 el)) oa_temp
+            let in_dir item 1 el
+            let in_ma oaIndex open-angle
+            let in_oa oaIndex item 0 oa_temp
+            
+            let persective_angles intersection-level-angle in_ma in_oa in_dir
+            
+            if (length persective_angles = 1) [
+              send (list "closed_look_ahead" who who) post item (item 0 persective_angles) nbrs
+            ]
+          ]
+        ]
+        
+        ;;recalculate LA in O, END
+        ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+        
+      ]
+    ]
+  ]
+end
+
+;;If a SSNG post has open-angle message
+to update_O_table
+  let msg received "open-angle"
+  let senderId item 6 msg
+  
+  ifelse (intrsct) [
+    
+    let index find-position 0 item 1 msg O
+    if (index != false) [
+      let la_temp item 6 item index O
+      set O remove-item index O
+      set O lput (list item 1 msg (position item 6 msg nbrs) (item 2 msg) (item 3 msg) (item 4 msg) (item 5 msg) la_temp) O
+    ]
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    ;;;; on the fly perspective calculation
+    let oa_temp []
+    set oa_temp lput (list (item 2 msg) (item 3 msg) (item 4 msg) (item 5 msg)) oa_temp
+    let in_dir position senderId nbrs
+    let in_ma oaIndex open-angle
+    let in_oa oaIndex item 0 oa_temp
+    
+    
+    let persective_angles intersection-level-angle in_ma in_oa in_dir
+    
+    if (length persective_angles = 1) [
+      send (list "closed_look_ahead" who who) post item (item 0 persective_angles) nbrs
+    ]
+    
+    ;;;; on the fly perspective calculation, END
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+  ][
+    ;; posts that are not intersection transmit the incoming open-angle information to the next post
+    foreach fl [ el -> 
+      if (item 1 el = true and (item 0 el != item 6 msg)) [
+        send (list "open-angle" (item 1 msg) (item 2 msg) (item 3 msg) (item 4 msg) (item 5 msg) who) post item 0 el
+      ]
+    ]
+  ]
+end
+
+to re_update_O_table
+  let msg received "closed_look_ahead"
+  ifelse (intrsct) [
+    let index find-position 0 item 1 msg O
+    if (index != false) [
+      let source_in_o_temp item index O
+      set O remove-item index O
+      set O lput (list (item 0 source_in_o_temp) (item 1 source_in_o_temp) (item 2 source_in_o_temp) (item 3 source_in_o_temp) (item 4 source_in_o_temp) (item 5 source_in_o_temp) 0) O 
+    ]     
+  ][
+    ;; posts that are not intersection transmit the incoming open-angle information to the next post
+    foreach fl [ el -> 
+      if (item 1 el = true and (item 0 el != item 2 msg)) [
+        send (list "closed_look_ahead" (item 1 msg) who) post item 0 el
+      ]
+    ]
+  ]
+end
+
+to-report isIntersection?
+  let counter 0
+  foreach fl [el -> if (item 1 el = true) [set counter counter + 1] ]
+  ifelse (counter = 4) [report true][report false]
+end
+
+to-report find-position [indx_elem key tbl]
+  let retval -1
+  foreach tbl [el ->
+    if (item indx_elem el = key) [
+      set retval position el tbl
+    ]
+  ]
+  ifelse (retval != -1)[report retval][report false]
+end
+
+to-report oaIndex [tbl]
+  let temp []
+  let k 0
+  foreach tbl [ el ->
+    if(el = 1) [
+      set temp lput k temp
+    ]
+    set k k + 1
+  ]
+  report temp
+end

@@ -1,0 +1,301 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;  DYNAMIC MOTES  ;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to step-main-vhcl
+  if ([breed] of self = cars)[
+    let car_id who
+    let car-current-location (list xcor ycor)
+    ;;;; Manhattan or Euclidean ?????
+    let remained_distance manhattan_distance car-current-location
+    let azimuth -1
+    ifelse (remained_distance != 0)[set azimuth get_azimuth car-current-location][set azimuth 0]
+    let car_heading [heading] of self  ;; it is not needed in a real situation
+    let target -1
+    
+    ask posts-here [
+      set target who
+    ]
+    
+    
+    if (target != -1) [     
+      
+      set fd_permit 0
+      
+      if (step_cnt = 0)[
+        send (list "info_request" car_id) post target
+        set step_cnt 1
+      ]
+      
+      ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+      ;;Making or Updating Tables
+      let exist? false
+      
+      while [has-message "intersection_response"][
+        let msg received "intersection_response"
+        set post_id item 1 msg
+        
+        
+        if (first_cnt = 1) [
+          foreach intrscthist [ el ->
+            if (item 1 el = post_id)[set exist? true]
+          ]
+          set first_cnt 0
+        ]
+        
+        ifelse (exist?) [
+          foreach intrscthist[ el ->
+            if (item 1 el = item 1 msg and item 2 el = item 2 msg)[
+              let f_encounter item 0 el
+              let h item 6 el
+              let explrd item 7 el
+              set intrscthist remove el intrscthist
+              set intrscthist lput (list f_encounter item 1 msg item 2 msg  item 3 msg item 4 msg item 5 msg h explrd) intrscthist
+            ]
+          ]
+        ][
+          let alpha min-angle azimuth (item 2 msg)
+          let h normalize alpha
+          
+          ifelse (item 3 msg = -1)[
+            set intrscthist lput (list ticks item 1 msg item 2 msg  item 3 msg item 4 msg item 5 msg h 2) intrscthist
+          ][
+            ;let alpha min-angle azimuth (item 2 msg)
+            ;let h normalize alpha
+            set intrscthist lput (list ticks item 1 msg item 2 msg  item 3 msg item 4 msg item 5 msg h 0) intrscthist
+          ]
+        ]
+       
+        set msg_type "intersection"
+        set step_cnt 2 
+      ]
+      
+      if(step_cnt = 2)[
+        foreach intrscthist [el ->
+          if (item 1 el = post_id and item 3 el = last_intrsct)[
+            let temp el
+            set intrscthist remove el intrscthist
+            set intrscthist lput (list item 0 temp item 1 temp item 2 temp  item 3 temp item 4 temp item 5 temp item 6 temp 1) intrscthist
+          ]
+        ]
+        set step_cnt 3
+      ]      
+      
+
+      while [has-message "street_response"] [
+        let msg received "street_response"
+        let in_id item 2 msg
+        let in_los item 3 msg
+        set street lput (list in_id in_los) street
+        set msg_type "street"
+        set post_id item 1 msg
+        set step_cnt 3
+      ]
+      
+      
+      if (step_cnt = 3) [
+        ;; Clearing/creating the car log history
+        ifelse (length car-log > 1) [
+          set car-log remove-item 0 car-log
+          set car-log lput [who] of post post_id car-log
+        ][
+          set car-log lput [who] of post post_id car-log
+        ]
+        set step_cnt 4
+      ]
+      
+      ;;Making or Updating Tables, END
+      ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+      
+      
+      ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+      ;;Decision Making
+
+      if (step_cnt = 4)[
+        ifelse (msg_type = "intersection") [           
+          ifelse (remained_distance <= 9) [ ; 9 = streetDistance
+            let h_temp 2
+            let dir_to_go -1
+            let id_to_go -3
+            foreach intrscthist [el ->
+              if (item 1 el = post_id and item 4 el != 0)[
+                if (item 6 el < h_temp)[
+                  set h_temp item 6 el
+                  set dir_to_go item 2 el
+                  set id_to_go item 3 el
+                ]
+              ]
+            ]
+            ifelse (id_to_go != -3)[
+              set heading card2deg dir_to_go
+              if (id_to_go != -1) [
+                foreach intrscthist [el ->
+                  if (item 1 el = post_id and item 2 el = dir_to_go)[
+                    let temp el
+                    set intrscthist remove el intrscthist
+                    set intrscthist lput (list item 0 temp item 1 temp item 2 temp  item 3 temp item 4 temp item 5 temp item 6 temp 1) intrscthist
+                  ]
+                ]
+              ]
+              set last_intrsct post_id
+              set fd_permit 1
+            ][
+              path_finding car_id azimuth car_heading
+            ]
+          ][
+            ifelse (remained_distance <= 18) [ ; 18 = blockDistance = 2 * streetDistance 
+              let h_temp 2
+              let dir_to_go -1
+              let id_to_go -3
+              foreach intrscthist [el ->
+                if (item 1 el = post_id and item 4 el > 1 and item 2 el != -1)[;;;;;;;;;;;;;;;;;;;;;
+                  if (item 6 el < h_temp)[
+                    set h_temp item 6 el
+                    set dir_to_go item 2 el
+                    set id_to_go item 3 el
+                  ]
+                ]
+              ]
+              ifelse (id_to_go != -3 and id_to_go != -1)[;;;;;;;;;;;;;;;;;; changes @ 7:33PM
+                set heading card2deg dir_to_go
+                if (id_to_go != -1) [
+                  foreach intrscthist [el ->
+                    if (item 1 el = post_id and item 2 el = dir_to_go)[
+                      let temp el
+                      set intrscthist remove el intrscthist
+                      set intrscthist lput (list item 0 temp item 1 temp item 2 temp  item 3 temp item 4 temp item 5 temp item 6 temp 1) intrscthist
+                    ]
+                  ]
+                ]
+                set last_intrsct post_id
+                set fd_permit 1
+              ][
+                path_finding car_id azimuth car_heading
+              ]
+            ][
+              path_finding car_id azimuth car_heading
+            ]
+          ]
+        ][
+          let continue? false
+          foreach street [ el ->
+            if ((not member? item 0 el car-log) and item 1 el != 0)[set continue? true]
+          ]
+          if (continue? = false)[set heading flip-angle car_heading]
+          if (continue? = true and length street != 2)[set heading flip-angle car_heading]
+          set fd_permit 1
+        ]
+      ]
+    ] 
+    
+    ;;Decision Making, END
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    
+    if (fd_permit = 1) [
+      ifelse (remained_distance = 0) [
+        ;;print(word [shortest-path] of self "; car-path-length, " car-path-length)
+        ;;set cars_info lput (word [shortest-path] of self "; car-path-length, " car-path-length) cars_info
+        set cars_info lput (list shortest-path-value car-path-length) cars_info
+        set total_sensors_by_cars total_sensors_by_cars + (ceiling (car-path-length / 3))
+        ;; use the following syntax to sort the intrscthist by time of the first encounter
+        ;; let sorted_intrscthist sort-by [ [a b] -> item 0 a < item 0 b ] intrscthist
+        ;; then calculate the length of the path by (number of posts in intrscthist - 1) * blocklength
+        set breed succeededCars set color blue
+      ][
+        set step_cnt 0
+        set street []
+        set msg_type []
+        set post_id -1
+        set first_cnt 1
+        fd 1
+        set car-path-length car-path-length + 1
+      ]     
+    ] 
+  ]
+end
+
+
+
+
+to path_finding [car_id azimuth car_heading]
+  ;; find the best one and make the item 9 intrscthist = 1 it and set car heading to that best direction
+  let h_temp 2
+  let dir_to_go -1
+  let id_to_go -3
+  foreach intrscthist [el ->
+    if (item 1 el = post_id and item 5 el = 1 and item 7 el = 0 and item 4 el > 1 and item 2 el != -1)[ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+      if (item 6 el < h_temp)[
+        set h_temp item 6 el
+        set dir_to_go item 2 el
+        set id_to_go item 3 el
+      ]
+    ]
+  ]
+  
+  ifelse (id_to_go != -3 and id_to_go != -1)[ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    set heading card2deg dir_to_go
+    if (id_to_go != -1) [
+      foreach intrscthist [el ->
+        if (item 1 el = post_id and item 2 el = dir_to_go)[
+          let temp el
+          set intrscthist remove el intrscthist
+          set intrscthist lput (list item 0 temp item 1 temp item 2 temp  item 3 temp item 4 temp item 5 temp item 6 temp 1) intrscthist
+        ]
+      ]
+    ]
+  ][
+    set heading flip-angle car_heading
+  ]
+  
+  ;let cntr1 0
+  ;let cntr2 0
+  ;let cntr3 0
+  
+  ;foreach intrscthist [el ->
+  ;  if (item 1 el = post_id)[
+  ;    set cntr1 cntr1 + 1
+  ;  ]
+    
+  ;  if (item 1 el = post_id and item 7 el = 1)[
+  ;    set cntr2 cntr2 + 1
+  ;  ]
+    
+  ;  if (item 1 el = post_id and item 3 el = -1)[
+  ;    set cntr3 cntr3 + 1
+  ;  ]
+  ;]
+  
+  ;if (cntr1 = (cntr2 + cntr3))[
+  ;  foreach intrscthist [el ->
+  ;    if (item 1 el = post_id)[
+  ;      set intrscthist remove el intrscthist
+  ;    ]
+  ;  ]
+  ;]
+  
+  set last_intrsct post_id
+  set fd_permit 1 
+end
+
+to-report min-angle [azimuth cur_dir]
+  let temp-min-angle abs(azimuth - card2deg cur_dir)
+  ifelse (temp-min-angle <= 180) [report temp-min-angle][report 360 - temp-min-angle]
+end
+
+to-report get_azimuth [car-current-location]
+  let delta-x ([pxcor] of destination - item 0 car-current-location)
+  let delta-y ([pycor] of destination - item 1 car-current-location)
+  let this-azimuth atan delta-x delta-y
+  report this-azimuth
+end
+
+to-report manhattan_distance [car-current-location]
+  let delta-x ([pxcor] of destination - item 0 car-current-location)
+  let delta-y ([pycor] of destination - item 1 car-current-location)
+  report (abs(delta-x) + abs(delta-y))
+end
+
+to-report normalize [angle]
+  report((angle - 0)/(180 - 0))
+end

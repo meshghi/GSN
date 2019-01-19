@@ -1,0 +1,261 @@
+;;;**********************************************************************************;;;
+;;;**********************************************************************************;;;
+;;;**********************************************************************************;;;
+;;;************** The followings are adopted from Duckham's book  *******************;;;
+;;;**********************************************************************************;;;
+;;;**********************************************************************************;;;
+;;;**********************************************************************************;;;
+
+
+;; Every turtle stores 4 local variables:
+;; * messages, a list of received messages
+;; * state, the automaton state of the mote
+;; * parent, the parent of the mote
+;; * children, the list of the posts children
+;; In addition, two variables are used for reporting:
+;; * Sent messages in msgsent (list of messages sent, structured [[m1, n1, l1], [n2, n2, l2], ...])
+;; * Received messages in msghear (messages heard, but not processed), same structure.
+;; * Received messages in msgrecv (messages received and processed), same structure.
+;; m1, m2, ... is message name; n1, n2, ... is number of messages; l1, l2, ... is message length
+;; turtles-own [messages state parent children msgsent msgrecv msghear]
+;; Defining turtles variables
+turtles-own [messages state msgsent msgrecv msghear]
+
+
+;; Become function: assigning a proper color to each state
+to become [newstate]
+  set state newstate
+  
+  ;;;;;;;;;;;;;;;;;
+  ;;for the Sweep algorithm
+  if state = "INIT" [set color yellow]
+  if state = "IDLE" [set color 86]  ;; Light blue
+  if state = "FRNT" [set color yellow]
+  if state = "SWPT" [set color 104] ;; Dark blue
+  ;;end
+  ;;;;;;;;;;;;;;;;;
+  
+  ;;;;;;;;;;;;;;;;;
+  ;;for the main algorithm
+  if state = "main-INIT" [set color 35]  ;; Brown-not white(9.9)
+  if state = "main-IDLE" [set color 86]  ;; Light blue
+  if state = "main-SSNG" [set color 104] ;; Dark blue
+  if state = "main-RIGN" [set color 45]  ;; Yellow
+  
+  ;; These three states haven't explicitely been used yet!!! But, the implementation of the dynamicMotes.nls has all the functionalities.
+  if state = "main-OAVD" [set color green]
+  if state = "main-HOME" [set color red]
+  if state = "main-SUCC" [set color magenta]
+  ;;end
+  ;;;;;;;;;;;;;;;;;
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Functions for sending and receiving messages                                        ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Received messages are added to the queue
+to receive [message]
+  ;print (word "received " message)
+  set messages lput message messages
+  if trackmsg [
+    update-msg-count "HEAR" message
+  ]
+end
+
+;; Broadcasting messages involves sending them to all link neighbors
+to broadcast [message]
+  ;print (word "broadcast" message)
+  ask link-neighbors [receive message]
+  if trackmsg [
+    update-msg-count "SENT" message
+  ]
+end
+
+;; Sending messages is a unicast to a specified target
+to send [message target]
+  ;print (word "sending to " target " msg: " message)
+  ask target [receive message]
+  if trackmsg [
+    update-msg-count "SENT" message
+  ]
+end
+
+;; Reports true if a particular message has been received.
+to-report has-message [mtype]
+  foreach messages [ el ->
+    if first el = mtype [
+      report true
+    ]
+  ]
+  report false
+end
+
+;; Received checks whether a message of a particular type has been received, and if so
+;; places this message in the nextmessage slot
+to-report received [mtype]
+  foreach messages [ el ->
+    if first el = mtype [
+      set messages remove-item position el messages messages ;; This only removes one item
+      let nextmessage el
+      if trackmsg [
+        update-msg-count "RECV" nextmessage
+      ]
+      report nextmessage
+    ]
+  ]
+  report []
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Utility functions for reporting on different messages                               ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; update-msg-count updates the stored message count on each node (number and length)
+;; The data is stored in a list [[name1 n1 l1] [name2 n2 l2] ... ] where
+;; name1, name2, ... is the names of different message types,
+;; n1, n2, ... is the number of messages of that type sent/received, and
+;; l1, l2, ... is the length of messages of that type sent/received
+;; Argument "sent" is either true or false. If true, the msgsent counts are updated; if
+;; false the msgrecv counts are updated
+;; Argument "message" contains the message to be sent/received
+to update-msg-count [mtype message]
+  let msgcount msghear ;; By default update counts messages heard
+  if mtype = "SENT" [set msgcount msgsent] ;; If sent=true then update counts of messages sent
+  if mtype = "RECV" [set msgcount msgrecv] ;; If sent=true then update counts of messages received
+
+  ;; tind is the index of the message name in msgsent/msgrecv
+  ;; if the message name does not appear in msgsent/msgrecv, tind is false
+  ;; for example: if msgcount is [["MSGE" 1 4] ["PING" 10 30]] and message is ["PING" ...] then tind = 1
+  ;; conversely if message is ["BDNY" ...] then tind = false
+  let tind position first message map [ el -> first el] msgcount
+  ifelse is-number? tind [
+    ;; Update the count of numbers of message
+    set msgcount replace-item tind msgcount (replace-item 1 (item tind msgcount) ((item 1 (item tind msgcount)) + 1) )
+    ;; Update the count of length of message
+    set msgcount replace-item tind msgcount (replace-item 2 (item tind msgcount) ((item 2 (item tind msgcount)) + sum map [ el -> length (word el)] message))
+  ]
+  [
+    ;; Add new count for this message type
+    set msgcount fput (list first message 1 (sum map [ el -> length (word el)] message)) msgcount
+  ]
+
+  ;; Write the results back to msgsent/msgrecv
+  if mtype = "SENT" [set msgsent msgcount] ;; If update counts of messages sent
+  if mtype = "RECV" [set msgrecv msgcount] ;; If update counts of messages received
+  if mtype = "HEAR" [set msghear msgcount] ;; If update counts of messages heard
+end
+
+;; reports message count totals for all posts
+;; argument "mtype" is "SENT", "RECV", or "HEAR"
+;; argument "lngth" is true if message length is to be reported; false if number of messages is to be reported
+to-report msg-totals [mtype lngth]
+  let ind 1
+  if lngth = true [set ind 2]
+  if mtype = "SENT" [
+    report sum [sum map [ el -> item ind el] msgsent] of posts with [length msgsent > 0]
+  ]
+  if mtype = "RECV" [
+    report sum [sum map [ el -> item ind el] msgrecv] of posts with [length msgrecv > 0]
+  ]
+  if mtype = "HEAR" [
+    report sum [sum map [ el -> item ind el] msghear] of posts with [length msghear > 0]
+  ]
+end
+
+;; reports message count totals for all posts for a particular message name
+;; argument "sent" is true if sent messages to be reported; false if received messages to be reported
+;; argument "lngth" is true if message length is to be reported; false if number of messages is to be reported
+;; argument "name" is the name of the message to be counted
+to-report msg-totals-by-name [mtype lngth name]
+  let ind 1
+  if lngth = true [set ind 2]
+  if mtype = "SENT" [
+    report sum [sum map [ el -> item ind el] filter [ el -> first el = name] msgsent] of posts with [length filter [ el -> first el = name] msgsent > 0]
+  ]
+  if mtype = "HEAR" [
+    report sum [sum map [ el -> item ind el] filter [ el -> first el = name] msghear] of posts with [length filter [ el -> first el = name] msghear > 0]
+  ]
+  if mtype = "RECV" [
+    report sum [sum map [ el -> item ind el] filter [ el -> first el = name] msgrecv] of posts with [length filter [ el -> first el = name] msgrecv > 0]
+  ]
+end
+
+;; Wrapper for msg-totals
+to-report sent-length-msg-totals
+  report msg-totals "SENT" true
+end
+
+;; Wrapper for msg-totals
+to-report sent-number-msg-totals
+  report msg-totals "SENT" false
+end
+
+;; Wrapper for msg-totals
+to-report recv-length-msg-totals
+  report msg-totals "RECV" true
+end
+
+;; Wrapper for msg-totals
+to-report recv-number-msg-totals
+  report msg-totals "RECV" false
+end
+
+;; Wrapper for msg-totals
+to-report hear-length-msg-totals
+  report msg-totals "HEAR" true
+end
+
+;; Wrapper for msg-totals
+to-report hear-number-msg-totals
+  report msg-totals "HEAR" false
+end
+
+;; Wrapper for msg-totals-by-name
+to-report sent-length-msg-totals-by-name [name]
+  report msg-totals-by-name "SENT" true name
+end
+
+;; Wrapper for msg-totals-by-name
+to-report sent-number-msg-totals-by-name [name]
+  report msg-totals-by-name "SENT" false name
+end
+
+;; Wrapper for msg-totals-by-name
+to-report recv-length-msg-totals-by-name [name]
+  report msg-totals-by-name "RECV" true name
+end
+
+;; Wrapper for msg-totals-by-name
+to-report recv-number-msg-totals-by-name [name]
+  report msg-totals-by-name "RECV" false name
+end
+
+;; Wrapper for msg-totals-by-name
+to-report hear-length-msg-totals-by-name [name]
+  report msg-totals-by-name "HEAR" true name
+end
+
+;; Wrapper for msg-totals-by-name
+to-report hear-number-msg-totals-by-name [name]
+  report msg-totals-by-name "HEAR" false name
+end
+
+;; Utility function for counting occurrences of an item in a list
+to-report count-occurrences [x mylist]
+  report length filter [ el -> el = x] mylist
+end
+
+;; Utility function to output a histogram data list
+to-report histogram-data [mylist]
+  let ditems ""
+  let dcount ""
+  foreach reverse sort remove-duplicates mylist [ el ->
+    set ditems (word el ", " ditems)
+  ]
+  foreach reverse sort remove-duplicates mylist [ el ->
+    set dcount (word count-occurrences el mylist ", " dcount)
+  ]
+  report (word "items, " ditems " count, " dcount)
+
+end

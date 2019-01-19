@@ -1,0 +1,290 @@
+
+;; re-setup for each run of the algorithm
+to doSetup
+  set cars_info []
+  set cars_destinations []
+  set err_count 0
+  set total_sensors_by_cars 0
+  reset-ticks
+  ask cars [die]
+  ask deadCars [die]
+  ask succeededCars [die]
+  ask noDestCars [die]
+  re-setup-patches
+  re-setup-posts
+  setup-flood
+  ;re-setup-posts
+  create-turtles number-of-cars [setup-cars]
+end
+
+;; reset patches for each run of the algorithm
+to re-setup-patches
+  ask patches [set plabel ""]
+  ask patches [
+    set pcolor brown + 4
+    set fld? false
+  ]
+  ask roads [
+    set pcolor white
+    set intsctn? false
+  ]
+  ask intersections [
+    set intsctn? true
+  ]
+end
+
+;; Setting the location of flood and if the flood is static, the flood will be fully created
+to setup-flood
+  ifelse (Spreaded-Flood? = true) [
+    ;repeat 5 [
+    repeat 3 [
+      ask one-of patches with [not flood? and not dest? and count cars-here = 0] [
+        flood
+      ]
+    ]
+  ][
+    ask one-of patches with [not flood? and not dest? and count cars-here = 0] [
+      flood
+    ]
+  ]
+  if Dynamic-Flood? = false [
+    while [count patches with [flood?] < Flood-size][
+      ask patches with [flood?] [
+        ;ask one-of neighbors[
+        ask neighbors4[ ; with [not dest?] [
+          flood
+        ]
+      ]
+      repeat 20 [ask posts [ step-main ]]
+    ]
+  ]
+end
+
+to-report flood?
+  report fld?
+end
+
+to flood
+  set fld? true
+  set pcolor 57
+end
+
+to-report dest?
+  report pcolor = magenta
+end
+
+;; reset posts for each run of the algorithm
+to re-setup-posts
+  ask posts [
+    set color grey
+    set breed posts
+    set shape "circle"
+    set plos 3
+    set ntw road_check
+    set intrsct false
+    set fl []
+    set open-angle []
+    set O []
+    set limit 1
+    set messages []
+    set msgsent []
+    set msgrecv []
+    set msghear []
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    ;;;; USE IT WHEN RUN EXPERIMENTS
+    ask link-neighbors [
+      if (([xcor] of myself = [xcor] of self) and ([ycor] of myself > [ycor] of self)) [set nbrs replace-item 0 nbrs [who] of myself]
+      if (([xcor] of myself > [xcor] of self) and ([ycor] of myself = [ycor] of self)) [set nbrs replace-item 1 nbrs [who] of myself]
+      if (([xcor] of myself = [xcor] of self) and ([ycor] of myself < [ycor] of self)) [set nbrs replace-item 2 nbrs [who] of myself]
+      if (([xcor] of myself < [xcor] of self) and ([ycor] of myself = [ycor] of self)) [set nbrs replace-item 3 nbrs [who] of myself]
+    ]
+    ;;;; USE IT WHEN RUN EXPERIMENTS. END!
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    
+    ;; Setting motes' initial step as INIT
+    become "main-INIT"   
+
+    set open-angle [1 1 1 1]
+  ]
+  ;; motes initialization
+  repeat 20 [ask posts [step-main]]
+end
+
+;; Initializing cars
+to setup-cars
+  set breed cars
+  set color red - 2
+  set size 1.3
+  set label word "C" who
+  set label-color black
+  set messages []
+  set msgsent []
+  set msgrecv []
+  set msghear []
+  set shortest-path []
+  set car-path-length 0
+  set car-log []
+  set intrscthist []
+  set street []
+  set last_intrsct -1
+  set fd_permit 1
+  set step_cnt 0
+  set msg_type []
+  set post_id -1
+  set first_cnt 1
+  
+  ;;Putting car on an empty not-flooded road
+  move-to one-of roads with [not any? turtles-on self
+    and not flood?
+    and count neighbors with [flood?] = 0
+    and not dest?
+    ;and min-x-axis + 3 < pxcor
+    ;and pxcor < max-x-axis - 3
+    ;and min-y-axis + 3 < pycor
+    ;and pycor < max-y-axis - 3
+  ] 
+  ;;Setting car's heading
+  let dir_set [0 2 1 3]
+  if intsctn? [
+    set heading card2deg item random 4 dir_set
+  ]
+  ifelse on-vertical-road [
+    set heading card2deg item random 2 dir_set
+  ][
+    set heading card2deg item (2 + random 2) dir_set
+  ]
+  ;;Setting car's destination
+  let car-id who
+  set destination one-of roads with [not flood?
+    ;and count neighbors with [flood?] = 0
+    and not dest?
+    and ((pxcor > ([xcor] of car car-id + 10)) or (pxcor < ([xcor] of car car-id - 10)))
+    and ((pycor > ([ycor] of car car-id + 10)) or (pycor < ([ycor] of car car-id - 10)))
+    ;and pxcor != [xcor] of car car-id
+    ;and pycor != [ycor] of car car-id
+    ;and has-post?
+    ;and min-x-axis + 3 < pxcor
+    ;and pxcor < max-x-axis - 3
+    ;and min-y-axis + 3 < pycor
+    ;and pycor < max-y-axis - 3
+  ]
+  ask destination [
+    set-dest
+  ]
+  
+  set cars_destinations lput (list [pxcor] of destination [pycor] of destination car-id) cars_destinations
+  
+  ;; using the location of cars for calculating the the difference between the shortest path and the path taken by the cars using this algorithm
+  let sh-pth mdist
+  set shortest-path-value sh-pth
+  set shortest-path (word
+    "Car No. " who
+    ": Initial location, [" [xcor] of self ", " [ycor] of self "]"
+    "; Destination location, [" [pxcor] of destination ", " [pycor] of destination "]"
+    "; Length of the shortest path, " sh-pth)
+end
+
+to set-dest
+  set pcolor magenta
+  set plabel word "D" [who] of myself
+  set plabel-color black
+end
+
+to-report mdist
+  report abs ([xcor] of self - [pxcor] of destination)
+  + abs ([ycor] of self - [pycor] of destination)
+end
+
+;; Checking cars' road
+to-report on-vertical-road
+  report (pxcor mod 3 = 0 and pycor mod 3 != 0)
+end
+
+
+;;;;;;;;;;;;;;;;
+;;;;;  GO  ;;;;;
+;;;;;;;;;;;;;;;;
+
+to doGo
+  ifelse Dynamic-Flood? = true [
+    ;; flooding (DYNAMIC FLOOD) ;; considering the flood expansion slower than the rate of information transmission among posts and the speed of cars
+    if (ticks mod 32 = 0)[
+      if (count patches with [flood?] <= Flood-size) [
+        ask patches with [flood?] [
+          ;ask one-of neighbors[
+          ask neighbors4 [; with not dest? and
+                               ;count neighbors with [dest?] = 0
+                               ;and count cars-here = 0] [
+            flood
+          ]
+        ]
+      ]
+    ]
+    ;; asking posts and cars to operate
+    ask posts [ step-main ]
+    if (ticks mod 16 = 0)[
+      ask cars [
+        if flood? [
+          set total_sensors_by_cars total_sensors_by_cars + (ceiling (car-path-length / 3))
+          set cars_info lput (list 0 0) cars_info
+          set breed deadCars set color black
+        ]
+        step-main-vhcl
+      ]
+    ]
+    
+    foreach cars_destinations [ el ->
+      ask patch item 0 el item 1 el[
+        if (fld? = true)[
+          ask cars [
+            if (who = item 2 el)[
+              set total_sensors_by_cars total_sensors_by_cars + (ceiling (car-path-length / 3))
+              set cars_info lput (list -1 -1) cars_info
+              set breed noDestCars set color violet
+            ]
+          ]
+          set cars_destinations remove-item position el cars_destinations cars_destinations
+        ]
+      ]
+    ]
+    
+    tick
+  ][
+    ask posts [ step-main ]
+    if (ticks mod 16 = 0)[
+      ask cars [
+        if flood? [
+          set total_sensors_by_cars total_sensors_by_cars + (ceiling (car-path-length / 3))
+          set cars_info lput (list 0 0) cars_info
+          set breed deadCars set color black
+        ]
+        step-main-vhcl
+      ]
+    ]
+    
+    foreach cars_destinations [ el ->
+      ask patch item 0 el item 1 el[
+        if (fld? = true)[
+          ask cars [
+            if (who = item 2 el)[
+              set total_sensors_by_cars total_sensors_by_cars + (ceiling (car-path-length / 3))
+              set cars_info lput (list -1 -1) cars_info
+              set breed noDestCars set color violet
+            ]
+          ]
+          set cars_destinations remove-item position el cars_destinations cars_destinations
+        ]
+      ]
+    ]
+    tick
+  ]
+  
+  if (ticks = 3999) [
+    ask cars [
+      set total_sensors_by_cars total_sensors_by_cars + (ceiling ((car-path-length + 1) / 3))
+      set cars_info lput (list shortest-path-value (car-path-length + 1)) cars_info
+    ]
+  ]
+end

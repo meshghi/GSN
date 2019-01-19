@@ -1,0 +1,262 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Set Abstraction
+;;
+to-report subset [s1 s2]
+  foreach s1 [ el ->
+    if not member? el s2 [report false]
+  ]
+  report true
+end
+
+;; use set abstraction (see below)
+to-report eqset [s1 s2]
+  report subset s1 s2 and subset s2 s1
+end
+
+to-report intersection [s1 s2]
+  let retval []
+  foreach s1 [ el ->
+    if member? el s2  [set retval fput el retval]
+  ]
+  report retval
+end
+
+to-report union [s1 s2]
+  let retval s1
+  foreach s2 [ el ->
+    if not member? el retval  [set retval fput el retval]
+  ]
+  report retval
+end
+
+to-report setminus [s1 s2]
+  let retval []
+  foreach s1 [ el ->
+    if not member? el s2  [set retval fput el retval]
+  ]
+  report retval
+end
+
+to-report bitv2set [bitv]
+  let retval []
+  let i 0
+  foreach bitv [ el ->
+    if el [set retval fput i retval]
+    set i i + 1
+  ]
+  report retval
+end
+
+to-report set2bitv [s]
+  let retval []
+  foreach range 4 [ el ->
+    ifelse member? el s [set retval lput true retval][set retval lput false retval]
+  ]
+  report retval
+end
+;; Set Abstraction end
+;;;;;;;;;;;
+
+
+;;;;;;;;;;;;;
+;; Angles
+;; calculate angles by updating from neighbors
+;; we assume the following assignment of angles: north, east, south, west are 0,1,2,3 (according to the ordering in the messages)
+;; ma is the angle to update, oa is the neighbor's angle (where neighbor is the next intersection), dir is the direction where the neighbor is
+;; this message needs to be forwarded between intersections, where road posts should only forward updates along directions that are not blocked
+;; once the message meets another intersection it is no longer forwarded
+;; intersection-level output angles merge (union) the two angles removing the direction dir from ma and opposite dir from oa
+;; we only make the intersection a dead end if oa is a dir-mirror of ma
+;; intersection-level updates should only go to the next intersection
+to-report intersection-level-angle [ma oa dir]
+  let ma1 setminus ma (list dir)
+  let oa1 setminus oa (list oppangle dir)
+  report union ma1 oa1
+end
+
+;; road-level updates should only go to the first intersection post
+to-report road-level-angle [ma oa dir]
+  ifelse not member? dir oa [report setminus ma (list dir)][report ma]
+end
+
+;; opposite angle
+;; with the assignment of angles as: north, east, south, west are 0,1,2,3 (according to the ordering in the messages)
+to-report oppangle [dir]
+  report (dir + 2) mod 4
+end
+
+;; cardinal direction to degree conversion
+to-report card2deg [dir]
+  ;report ((dir + 1) * 90) mod 360
+  report (dir * 90) mod 360
+end
+
+;; degree to cardinal direction conversion
+to-report deg2card [deg]
+  ;report (deg / 90 - 1) mod 4
+  report (deg / 90) mod 4
+end
+
+;; relative directions to absolute directions for a turtle heading towards absfront cardinal direction N,E,S,W
+;; and reldir is relative direction front,left,back,right as 0,1,2,3
+to-report rel2abs [reldir absfront]
+  report (absfront + reldir) mod 4
+end
+
+;; two more angle functions for illustration purposes
+;; with the assignment of angles as: north, east, south, west are 0,1,2,3 (according to the ordering in the messages)
+;; we get the axis by calculating mod 2
+to-report on-same-axis [d1 d2]
+  report d1 mod 2 = d2 mod 2
+end
+
+;; if d is on the axis of dir it is mirrored otherwise we keep it
+to-report mirror [dir d]
+  ;; we mirror on the axis of dir by moving two along the circle of directions
+  ifelse on-same-axis dir d [report oppangle d][report d]
+end
+;;Angles end
+;;;;;;;;;;;;;;;;;;
+
+
+
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;
+;; NEW Functions
+
+;; to mirror the angle, for moving objects to turn around
+to-report flip-angle [deg]
+  report (180 + deg) mod 360
+end
+
+;;;;;;;;;;;;;;
+;; 2 decision making scenario for open-angles based on the "intersection-level-angle" in the Angles part.
+
+;; for a situation that the oa has 3 or more than 3 angles that are open
+to-report intersection-level-angle1 [ma oa dir]
+  let oa1 setminus oa (list oppangle dir)
+  report union ma oa1
+end
+
+;; for a situation that the oa has 2 or less than 2 angles that are open
+to-report intersection-level-angle2 [ma oa dir]
+  let ma1 setminus ma (list dir)
+  let oa1 setminus oa (list oppangle dir)
+  report union ma1 oa1
+end
+;;end
+;;;;;;;;;;;;;;
+
+;; NEW Functions end
+;;;;;;;;;;;;;;;;;;;;;
+
+
+
+
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Unit Testing
+;; While you develop code you should always develop a test suit. It helps you to keep code running at all times.
+;; This function together with the global variable errn helps you do this. It is in-built in most languages in the strong variant
+to assert [bool]
+  ;; light variant: count errors (turn this code on instead of the strong variant to check whether your code is error free; result should be 0)
+  if not bool [set errn errn + 1]
+  ;; strong variant: create an error (turn this code on instead of the light variant to track down errors; use print and check how far your code got)
+  ;if not bool [error "Assertion Error"]
+end
+;; put tests into this function (as it gets too big split it up into several functions and put it into its own file)
+;; call it from setup (static tests)
+;; whenever you change something, you enable your tests and check whether they still run
+;; I do this here for the sets
+;; when you deploy code in the very end you just remove the line of code that calls the test
+to run-tests
+  ;; count successes
+  set errn 0
+  test-sets
+  test-angles
+  ifelse errn > 0 [print (word "Found " errn " errors.")][print "All tests passed successfully."]
+end
+
+;; Each unit of code should have its own test function so you can easily turn testing on and off for particular tests.
+to test-sets
+  let suberrn errn
+  print "testing sets and conversion"
+  set suberrn errn
+  let x [1 2 3]
+  let y [3 4 5]
+  assert subset [3] x
+  assert subset [3 2] x
+  assert not subset [3 4] x
+  assert subset [3 1 2] x
+  assert eqset intersection x y [3]
+  assert eqset union x y [5 4 3 2 1]
+  assert eqset setminus range 4 x [0]
+  ;;print (word "setminus" setminus range 4 x)
+  assert not eqset [1 2 3] [2 3]
+  assert not eqset [2 3] [1 2 3]
+  assert eqset x bitv2set set2bitv x
+  print (word "errors: " (errn - suberrn))
+end
+
+to test-angles
+  let suberrn errn
+  print "testing angles"
+  ;; N,E,S,W are represented as 0,1,2,3
+  set suberrn errn
+  let x [1 2 3]
+  let y [2 3]
+  ;print "on-same-axis" ;printing headings like this helps to track down errors
+  assert on-same-axis 0 2
+  assert on-same-axis 2 2
+  assert not on-same-axis 2 3
+  assert not on-same-axis 0 3
+  ;print "mirror"
+  assert mirror 1 2 = 2
+  ;print (mirror 2 2)
+  assert (mirror 2 2) = 0
+  assert mirror 2 2 = 0
+  assert mirror 3 2 = 2
+  assert mirror 3 3 = 1
+  assert mirror 3 1 = 3
+  ;print "road-level-angle"
+  assert eqset road-level-angle [0 2] [2] 0 [2]; direction 0 is blocked
+  assert eqset road-level-angle [1 3] [1] 1 [1 3]; (this case should be impossible to encounter)
+  assert eqset road-level-angle [1 3 2] [1] 3 [1 2]; direction 3 is blocked
+  ;print "intersection-level-angle"
+  assert not eqset intersection-level-angle [0 1 2] [2] 0 [2]; direction 0 is blocked, remove it
+  assert eqset intersection-level-angle [0 1] [2 3] 0 [1 3]; direction 0 is blocked, remove it
+  assert eqset intersection-level-angle [2 3] [1 2] 3 [2]; deadend U-shape
+  print "directions"
+  assert card2deg 0 = 0
+  assert card2deg 1 = 90
+  foreach range 4 [ dir ->
+    print (word dir " " card2deg dir)
+    assert (deg2card card2deg dir) = dir
+  ]
+  print (word "errors: " (errn - suberrn))
+  foreach (range 0 360 90) [ deg ->
+    print (word deg " " deg2card deg)
+    assert (card2deg deg2card deg) = deg
+  ]
+  ;print "turning cars" ; need to test this
+  ;assert rel2abs 1 3 = 0 ; turning left going west, means we are heading north now
+  print (word "errors: " (errn - suberrn))
+  let a [1 2 3 4 5 6]
+  let b 3
+  ;if (intersection a b != [])[print ("AAAAA")]
+  print (a)
+  print (b)
+  print (member? b a)
+  print("*********")
+  print (eqset [12 22] [22 22])
+end
+
+
+

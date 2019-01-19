@@ -1,0 +1,260 @@
+
+;;;;;;;;;;;;;;;;;;
+;;;;;
+
+to doSetup-Sweep
+  reset-ticks
+  set stop_controller 30
+  initialize_PostsInSweep
+end
+
+to initialize_PostsInSweep
+  ask posts [
+    become "IDLE" ;; Set all motes to state IDLE
+    set hop -1
+    set unsw []
+    set swep []
+  ]
+  if (sweep_type = "WE") [
+    ask min-n-of (((max-y-axis - min-y-axis) / 3) + 1) posts [xcor] [
+      become "INIT" ;; Initializing the sweep line
+    ]
+  ]
+  if (sweep_type = "SN") [
+    ask min-n-of (((max-x-axis - min-x-axis) / 3) + 1) posts [ycor] [
+      become "INIT" ;; Initializing the sweep line
+    ]
+  ]
+end
+
+to doGoSweep
+  ask posts [ step ]
+  tick
+  if ((count posts with [state = "SWPT"]) = (count posts)) [set stop_controller stop_controller - 1 stop ]
+end
+
+;;;;;
+;;;;;;;;;;;;;;;;;;
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Mote protocols
+;;
+
+;; Step through the current state
+to step
+  if state = "INIT" [ step_INIT stop ]
+  if state = "IDLE" [ step_IDLE stop ]
+  if state = "FRNT" [ step_FRNT stop ]
+  if state = "SWPT" [ step_SWPT stop ]
+end
+
+;; Motes in the INIT state initialize the sweep front before transitioning to the SWPT
+;; state
+to step_INIT
+  if ticks = 1 [ ;; On the first tick broadcast a ping message
+    set hop 0 ;; Reset hop count
+    broadcast (list "PING" hop) ;; Initiate hop count potential function
+  ]
+  if ticks > 20 [ ;; Wait until hop 21 to broadcast first INVT
+    broadcast (list "INVT" hop) ;; Initiate sweep algorithm inviting neighbors to join
+    become "SWPT"
+  ]
+end
+
+;; Motes receiving a PING message will update their hop count if the received value is
+;; lower before broadcasting their updated hop count.
+;; Motes receiving an INVT message will respond by broadcasting an "UNSW" message along
+;; with their hop count and id.
+;; Motes receiving a SWEP message will broadcast a CONF message along with their id and a
+;; b value to the receiving mote. The b value is true only if the received hop count is
+;; exactly one lower lower than the motes' hop count.
+;; Motes receiving an UNSW message will broadcast an ACPT message along with their id and
+;; a b value. The b value is true only if the received hop count is equal to or lower
+;; than the motes' hop count.
+;; Motes receiving an ACPT message will add the received motes' id to their unsw table
+;; only if the received mote is in the SWPT state or has a lower hop count. If all
+;; neighboring motes meet these conditions, the mote transitions into the FRNT state.
+to step_IDLE
+  if has-message "PING" [ ;; Receiving PING
+    let msg received "PING"
+    let h item 1 msg ;; Received hop count
+    if (h + 1) < hop or hop < 0 [ ;; Construct shortest path hop count potential function
+      set hop h + 1 ;; Update hop count
+      broadcast (list "PING" hop) ;; Continue construction of hop count potential function
+    ]
+    stop
+  ]
+
+  ;; Note --- there is an error here. Events should be enclosed in
+  ;; "if" rather than "while" statements. As a result, it is possible
+  ;; for unfair executions, where one type of message always dominates another
+  ;; This error led to some of the issues discussed in chapter 7 of the book
+  ;; associated with this code.
+  while [has-message "INVT"] [ ;; Receiving INVT
+    let msg received "INVT"
+    broadcast (list "UNSW" hop who) ;; If invited, check for unswept neighbors
+  ]
+
+  while [has-message "SWEP"] [ ;; Receiving SWEP
+    let msg received "SWEP"
+    let h item 1 msg ;; Received hop count
+    let i item 2 msg
+    ifelse h = hop - 1 ;; If received hop count is lower
+      [send (list "CONF" true who) post i]
+      [send (list "CONF" false who) post i]
+  ]
+
+  while [has-message "UNSW"] [ ;; Receiving UNSW
+    let msg received "UNSW"
+    let h item 1 msg ;; Received hop count
+    let i item 2 msg
+    ifelse h <= hop ;; If received hop count is higher, invite can be accepted
+    
+    ;;;;;;;;;;;;;;;;;
+    ;; The last part of the "ACPT" message is also added
+      [send (list "ACPT" true who false) post i]
+      [send (list "ACPT" false who false) post i]
+    ;;
+    ;;;;;;;;;;;;;;;;;
+    
+  ]
+
+  while [has-message "ACPT"] [ ;; Receiving ACPT
+    let msg received "ACPT"
+    let b item 1 msg ;; Received confirm or no
+    let i item 2 msg
+
+    ;;;;;;;;;;;;;;;;;
+    ;; Added part. Part 3 of the message is also added in order to check for the right moment to set identify the neighbors!
+    if item 3 msg [
+      if (sweep_type = "WE")[set nbrs replace-item 3 nbrs i]
+      if (sweep_type = "SN")[set nbrs replace-item 2 nbrs i]
+    ]
+    ;;
+    ;;;;;;;;;;;;;;;;;
+    
+    if b and not member? i unsw [
+      set unsw fput i unsw ;; Add neighbor to unswept list
+    ]
+    if length unsw = count link-neighbors [ ;; If all neighbors are in unsw list
+     become "FRNT" ;; Accept invitation once all neighbors respond
+    ]
+  ]
+end
+
+;; Motes receiving a PING message will update their hop count if the received value is
+;; lower before broadcasting their updated hop count.
+;; Motes receiving a CONF message will add the received motes' id to their swep table
+;; only if the received mote is in the UNSW state with the same hop count or in the IDLE
+;; state with a greater hop count. If all neighboring motes meet these conditions, the
+;; mote transitions into the SWPT state.
+;; Motes receiving a SWEP message will broadcast a CONF message along with their id and a
+;; b value. The b value is true only if the received hop count is equal to the motes'
+;; hop count.
+;; Motes receiving an UNSW message will broadcast an ACPT message along with their id and
+;; a b value. The b value is true only if the received hop count is equal to or lower
+;; than the motes' hop count.
+to step_FRNT
+  if length messages = 0 [ ;; Spontaneously
+    broadcast (list "SWEP" hop who)
+  ]
+
+  if has-message "PING" [ ;; Receiving PING
+    let msg received "PING"
+    let h item 1 msg ;; Received hop count
+    if (h + 1) < hop or hop < 0 [ ;; Construct shortest path hop count potential function
+      set hop h + 1 ;; Update hop count
+      broadcast (list "PING" hop) ;; Continue construction of hop count potential function
+    ]
+    stop
+  ]
+
+  while [has-message "CONF"] [ ;; Receiving CONF
+    let msg received "CONF"
+    let b item 1 msg ;; Received confirm or no
+    let i item 2 msg
+
+
+    if b and not member? i swep [
+      set swep fput i swep ;; Add neighbor to swept list
+    ]
+    if length swep = count link-neighbors [ ;; If all neighbors are in unsw list
+      broadcast (list "INVT" hop) ;; Broadcast new invite
+      become "SWPT"
+    ]
+  ]
+
+  while [has-message "SWEP"] [ ;; Receiving SWEP
+    let msg received "SWEP"
+    let h item 1 msg ;; Received hop count
+    let i item 2 msg
+    ifelse h = hop ;; Check sweep condition
+      [send (list "CONF" true who) post i]
+      [send (list "CONF" false who) post i]
+  ]
+
+  while [has-message "INVT"][ ;; Do nothing
+    let msg received "INVT"
+  ]
+
+  while [has-message "ACPT"][ ;; Do nothing
+    let msg received "ACPT"
+  ]
+
+
+  while [has-message "UNSW"] [ ;; Receiving UNSW
+    let msg received "UNSW"
+    let h item 1 msg ;; Received hop count
+    let i item 2 msg
+    ifelse h <= hop ;; If received hop count is higher, invite can be accepted
+    
+    ;;;;;;;;;;;;;;;;;
+    ;; The last part of the "ACPT" message is also added
+      [send (list "ACPT" true who false) post i]
+      [send (list "ACPT" false who false) post i]
+    ;;
+    ;;;;;;;;;;;;;;;;;
+    
+  ]
+end
+
+;; Motes receiving a SWEP message will broadcast a CONF message along with their id and a
+;; b value. The b value is true.
+;; Motes receiving an UNSW message will broadcast an ACPT message along with their id and
+;; a b value. The b value is true.
+to step_SWPT
+  while [has-message "SWEP"] [ ;; Receiving SWEP
+    let msg received "SWEP"
+    let h item 1 msg ;; Received hop count
+    let i item 2 msg
+    send (list "CONF" true who) post i ;; Swept motes can always respond to conf message
+  ]
+
+  while [has-message "INVT"][ ;; Do nothing
+    let msg received "INVT"
+  ]
+
+  while [has-message "PING"][ ;; Do nothing
+    let msg received "PING"
+  ]
+
+  while [has-message "UNSW"] [ ;; Receiving UNSW
+    let msg received "UNSW"
+    let h item 1 msg ;; Received hop count
+    let i item 2 msg
+    ;;;;;;;;;;;;;;;;;
+    ;; The last part of the "ACPT" message is also added
+    send (list "ACPT" true who true) post i ;; Swept motes can always respond to unsw message
+    ;;
+    ;;;;;;;;;;;;;;;;;
+    
+    ;;;;;;;;;;;;;;;;;
+    ;; Added part
+    if (sweep_type = "WE")[set nbrs replace-item 1 nbrs i]
+    if (sweep_type = "SN")[set nbrs replace-item 0 nbrs i]
+    ;;
+    ;;;;;;;;;;;;;;;;;
+  ]
+end

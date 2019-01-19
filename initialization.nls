@@ -1,0 +1,81 @@
+
+to doInitialize
+  clear-all
+  reset-ticks
+  setup-world-size
+  setup-patches
+  initialize-posts
+end
+
+to setup-world-size
+  set min-x-axis -6
+  set min-y-axis -6
+  set max-x-axis x-axis-extension
+  set max-y-axis y-axis-extension
+  resize-world min-x-axis max-x-axis min-y-axis max-y-axis
+end
+
+;; Setting patches as road, non-road, and intersection
+to setup-patches
+  set roads patches with [road_check]
+  set intersections patches with [intsctn_check]
+  ask patches [
+    set pcolor brown + 4
+    set fld? false
+  ]
+  ask roads [
+    set pcolor white
+    set intsctn? false
+  ]
+  ask intersections [
+    set intsctn? true
+  ]
+end
+
+;; Checking the road characteristic of a patch
+to-report road_check
+  report (pxcor mod bXlength = 0 or pycor mod bYlength = 0)
+end
+
+;; Checking the intersections characteristic of a patch
+to-report intsctn_check
+  report (pxcor mod bXlength = 0 and pycor mod bYlength = 0)
+end
+
+;; Creating and initializing motes
+to initialize-posts
+  ;; Creating posts
+  ask patches [
+    if has-post? [
+      sprout 1 [
+        set color grey
+        set breed posts
+        set shape "circle"
+        set plos 3
+        set ntw road_check
+        set intrsct false
+        set fl []
+        set open-angle []
+        set O []
+        set nbrs [-1 -1 -1 -1]
+        set messages []
+        set msgsent []
+        set msgrecv []
+        set msghear []
+      ]
+    ]
+  ]
+  ask posts [
+    ;; Creating links among posts
+    foreach sort posts [ m ->
+      if (distance m <= 3 and [who] of m != who) [
+        create-link-with m
+      ]
+    ]
+  ]
+end
+
+;; Checking a patch to see whether it's suitable to have a post or not
+to-report has-post?
+  report (pxcor mod 3 = 0 and pycor mod 3 = 0) ;3 is the distance between two consecutive posts
+end
